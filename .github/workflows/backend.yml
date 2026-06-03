@@ -158,7 +158,7 @@ jobs:
   #    breakage early without polluting the registry.
   # -----------------------------------------------------------------
   docker:
-    name: Docker (build${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && ' + push' || ' only' }})
+    name: Docker
     needs: [lint, audit, test]
     runs-on: ubuntu-latest
     permissions:
@@ -197,7 +197,7 @@ jobs:
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
 
-      - name: Build${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && ' + push' || '' }}
+      - name: Build (and push if main)
         uses: docker/build-push-action@v5
         with:
           context: ./backend
@@ -248,3 +248,54 @@ jobs:
         env:
           DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
         run: npx prisma migrate deploy
+
+  # -----------------------------------------------------------------
+  # 6. Pipeline summary — ALWAYS runs, even when upstream jobs skip
+  #    or fail. Writes a markdown table to the run page so it's obvious
+  #    at a glance which jobs ran, which skipped, and why.
+  # -----------------------------------------------------------------
+  summary:
+    name: Pipeline summary
+    if: always()
+    needs: [lint, audit, test, docker, migrate]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build summary
+        run: |
+          {
+            echo "## Pipeline result"
+            echo ""
+            echo "| Job | Result |"
+            echo "|---|---|"
+            echo "| Lint | ${{ needs.lint.result }} |"
+            echo "| Audit | ${{ needs.audit.result }} |"
+            echo "| Test | ${{ needs.test.result }} |"
+            echo "| Docker | ${{ needs.docker.result }} |"
+            echo "| Migrate | ${{ needs.migrate.result }} |"
+            echo ""
+            echo "**Trigger:** ${{ github.event_name }} on \`${{ github.ref }}\`"
+            echo ""
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Explain skips with a friendly note rather than just "skipped".
+          if [ "${{ needs.docker.result }}" = "skipped" ]; then
+            echo "ℹ️ **Docker skipped** because an earlier gate (lint/audit/test) failed." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ "${{ needs.migrate.result }}" = "skipped" ]; then
+            if [ "${{ github.ref }}" != "refs/heads/main" ] || [ "${{ github.event_name }}" != "push" ]; then
+              echo "ℹ️ **Migrate skipped** — this job only runs on \`push\` events to \`main\`. PRs and feature branches don't touch the production database." >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "ℹ️ **Migrate skipped** — Docker job did not succeed, so production migration was not attempted." >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+          # Fail the summary job (and therefore the workflow) only when a
+          # required gate actually failed — skipped jobs are not failures.
+          if [ "${{ needs.lint.result }}" = "failure" ] \
+            || [ "${{ needs.audit.result }}" = "failure" ] \
+            || [ "${{ needs.test.result }}" = "failure" ] \
+            || [ "${{ needs.docker.result }}" = "failure" ] \
+            || [ "${{ needs.migrate.result }}" = "failure" ]; then
+            echo "::error::One or more pipeline jobs failed."
+            exit 1
+          fi
