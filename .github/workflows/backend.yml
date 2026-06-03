@@ -94,4 +94,3 @@ steps:
       context: ./backend
       push: true
       tags: ${{ secrets.DOCKERHUB_USERNAME }}/fieldforce-backend:latest
-```
