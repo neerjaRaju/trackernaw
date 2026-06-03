@@ -1,6 +1,8 @@
 module.exports = {
   testEnvironment: 'node',
-  setupFilesAfterEach: ['<rootDir>/tests/teardown.js'],
+  // Cleanup happens once at the end of the whole test run via globalTeardown —
+  // simpler and faster than per-file teardown (runInBand means we don't risk
+  // tests interleaving anyway).
   globalSetup: '<rootDir>/tests/globalSetup.js',
   globalTeardown: '<rootDir>/tests/globalTeardown.js',
   testMatch: ['<rootDir>/tests/**/*.test.js'],

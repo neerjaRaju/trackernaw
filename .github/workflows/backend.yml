@@ -123,9 +123,12 @@ jobs:
         working-directory: ${{ env.WORKDIR }}
         run: npx prisma generate
 
-      - name: Apply migrations to test DB
+      - name: Apply schema to test DB
         working-directory: ${{ env.WORKDIR }}
-        run: npx prisma migrate deploy
+        # `db push` syncs schema.prisma directly — works even before the first
+        # `prisma migrate dev` has produced a committed migrations directory.
+        # Production deploys use `prisma migrate deploy` in the migrate job below.
+        run: npx prisma db push --skip-generate --accept-data-loss
 
       - name: Run tests with coverage
         working-directory: ${{ env.WORKDIR }}
