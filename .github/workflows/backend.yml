@@ -15,7 +15,6 @@ jobs:
 build-test:
 runs-on: ubuntu-latest
 
-```
 services:
   postgres:
     image: postgres:16-alpine
