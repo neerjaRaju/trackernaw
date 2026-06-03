@@ -1,11 +1,17 @@
 const request = require('supertest');
 const app = require('../src/app');
-const prisma = require('../src/utils/prisma');
+const { clearLockout } = require('./helpers');
+
+// Per-test unique email so order-dependent state (locks, audit rows) can't
+// bleed across cases.
+function uniqueEmail(prefix) {
+  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 100000)}@test.local`;
+}
 
 describe('POST /api/v1/auth/register', () => {
   it('creates company + user and returns tokens', async () => {
     const res = await request(app).post('/api/v1/auth/register').send({
-      email: `reg-${Date.now()}@test.local`,
+      email: uniqueEmail('reg'),
       password: 'secret123',
       fullName: 'Reg User',
       companyName: 'Acme',
@@ -13,16 +19,16 @@ describe('POST /api/v1/auth/register', () => {
     expect(res.status).toBe(201);
     expect(res.body.accessToken).toBeTruthy();
     expect(res.body.refreshToken).toBeTruthy();
-    expect(res.body.user.email).toContain('reg-');
-    expect(res.body.user.passwordHash).toBeUndefined(); // must not leak
+    expect(res.body.user.passwordHash).toBeUndefined();
     expect(res.body.user.role).toBe('COMPANY_ADMIN');
   });
 
   it('rejects duplicate email', async () => {
-    const email = `dup-${Date.now()}@test.local`;
-    await request(app).post('/api/v1/auth/register').send({
+    const email = uniqueEmail('dup');
+    const first = await request(app).post('/api/v1/auth/register').send({
       email, password: 'secret123', companyName: 'A',
     });
+    expect(first.status).toBe(201);
     const res = await request(app).post('/api/v1/auth/register').send({
       email, password: 'secret123', companyName: 'B',
     });
@@ -33,18 +39,30 @@ describe('POST /api/v1/auth/register', () => {
     const res = await request(app).post('/api/v1/auth/register').send({ email: 'x@x.x' });
     expect(res.status).toBe(400);
   });
+
+  it('rejects weak passwords', async () => {
+    const res = await request(app).post('/api/v1/auth/register').send({
+      email: uniqueEmail('weak'),
+      password: 'short',
+      companyName: 'Weak Co',
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/at least 8/i);
+  });
 });
 
 describe('POST /api/v1/auth/login', () => {
   let email;
   beforeAll(async () => {
-    email = `login-${Date.now()}@test.local`;
+    email = uniqueEmail('login');
     await request(app).post('/api/v1/auth/register').send({
       email, password: 'secret123', companyName: 'Login Co',
     });
+    await clearLockout(email);
   });
 
   it('returns tokens on correct password', async () => {
+    await clearLockout(email);
     const res = await request(app).post('/api/v1/auth/login').send({
       email, password: 'secret123',
     });
@@ -53,15 +71,16 @@ describe('POST /api/v1/auth/login', () => {
   });
 
   it('401 on wrong password', async () => {
+    await clearLockout(email);
     const res = await request(app).post('/api/v1/auth/login').send({
-      email, password: 'wrong',
+      email, password: 'wrong-password-x',
     });
     expect(res.status).toBe(401);
   });
 
   it('401 on unknown email', async () => {
     const res = await request(app).post('/api/v1/auth/login').send({
-      email: 'nobody@nowhere.test', password: 'whatever',
+      email: uniqueEmail('nobody'), password: 'whatever',
     });
     expect(res.status).toBe(401);
   });

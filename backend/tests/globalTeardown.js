@@ -1,5 +1,5 @@
 // Runs once after the entire test run completes.
-// Wipes every table (FK-safe order) so the test DB is clean for the next run.
+// Wipes every table and disconnects every external resource so Jest exits clean.
 module.exports = async () => {
   const { PrismaClient } = require('@prisma/client');
   const prisma = new PrismaClient();
@@ -33,5 +33,15 @@ module.exports = async () => {
     await prisma.company.deleteMany();
   } finally {
     await prisma.$disconnect();
+  }
+
+  // Flush the test Redis database (DB 15 by convention) and close the socket.
+  try {
+    const Redis = require('ioredis');
+    const r = new Redis(process.env.REDIS_URL || 'redis://localhost:6379/15');
+    await r.flushdb();
+    r.disconnect();
+  } catch (e) {
+    // Redis cleanup is best-effort — don't block test exit on it.
   }
 };
