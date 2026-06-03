@@ -29,8 +29,8 @@ module "rds" {
   engine_version    = "16.3"
   instance_class    = var.db_instance_class
   allocated_storage = 50
-  db_name           = "fieldforce"
-  username          = "fieldforce"
+  db_name           = "fieldforce_test"
+  username          = "fieldforce_test"
   password          = var.db_password
 }
 
@@ -47,7 +47,7 @@ module "ecs" {
   private_subnets     = module.vpc.private_subnets
   backend_image       = var.backend_image
   admin_image         = var.admin_image
-  database_url        = "postgresql://fieldforce:${var.db_password}@${module.rds.endpoint}/fieldforce"
+  database_url        = "postgresql://fieldforce_test:${var.db_password}@${module.rds.endpoint}/fieldforce_test"
   redis_url           = var.redis_url
   jwt_secret          = var.jwt_secret
   jwt_refresh_secret  = var.jwt_refresh_secret
