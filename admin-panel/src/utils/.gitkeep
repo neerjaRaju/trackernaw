@@ -1,0 +1,2 @@
+# Shared frontend utilities (date formatting, currency, distance, etc.).
+# Pure functions only — anything stateful belongs in hooks/.

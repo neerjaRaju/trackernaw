@@ -1,0 +1,5 @@
+environment   = "dev"
+region        = "us-east-1"
+backend_image = "your-account.dkr.ecr.us-east-1.amazonaws.com/fieldforce-backend:latest"
+admin_image   = "your-account.dkr.ecr.us-east-1.amazonaws.com/fieldforce-admin:latest"
+db_instance_class = "db.t4g.medium"

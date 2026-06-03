@@ -1,0 +1,3 @@
+# Obsolete — Prisma generates the model layer into node_modules/.prisma/client.
+# Source of truth for the schema is backend/prisma/schema.prisma.
+# Safe to delete this folder.

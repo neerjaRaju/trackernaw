@@ -1,0 +1,20 @@
+name: Mobile App CI
+
+on:
+  push:
+    branches: [main]
+    paths: ['mobile-app/**']
+  pull_request:
+    paths: ['mobile-app/**']
+
+jobs:
+  flutter:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.24.x'
+      - run: cd mobile-app && flutter pub get
+      - run: cd mobile-app && flutter analyze
+      - run: cd mobile-app && flutter test --no-pub

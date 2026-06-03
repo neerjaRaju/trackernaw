@@ -1,0 +1,3 @@
+# Typed data models for API responses (User, Attendance, Task, etc.).
+# Currently we use Map<String, dynamic> from Dio — adding typed models with
+# json_serializable would improve type safety and IDE help.

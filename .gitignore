@@ -1,0 +1,28 @@
+node_modules/
+dist/
+build/
+.env
+.env.local
+*.log
+.DS_Store
+.idea/
+.vscode/
+coverage/
+
+# Flutter
+mobile-app/.dart_tool/
+mobile-app/.flutter-plugins
+mobile-app/.flutter-plugins-dependencies
+mobile-app/.packages
+mobile-app/build/
+mobile-app/ios/Pods/
+mobile-app/ios/.symlinks/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+
+# Prisma
+backend/prisma/migrations/dev.db*

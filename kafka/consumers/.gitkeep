@@ -1,0 +1,3 @@
+# Obsolete — the Kafka consumer lives in backend/src/worker.js (a standalone
+# Node process for production) and backend/src/jobs/locationConsumer.js (inline
+# fallback for local dev). Safe to delete this folder.

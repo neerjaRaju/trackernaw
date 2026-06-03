@@ -1,0 +1,20 @@
+name: Admin Panel CI
+
+on:
+  push:
+    branches: [main]
+    paths: ['admin-panel/**']
+  pull_request:
+    paths: ['admin-panel/**']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: admin-panel/package-lock.json
+      - run: cd admin-panel && npm ci && npm run build

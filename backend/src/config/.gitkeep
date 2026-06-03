@@ -1,0 +1,3 @@
+# Reserved for runtime config objects loaded from env vars.
+# Currently env vars are read directly in the modules that need them.
+# Safe to delete this folder.

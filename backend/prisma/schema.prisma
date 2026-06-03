@@ -1,0 +1,540 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Multi-tenant company ----------
+model Company {
+  id          String   @id @default(uuid())
+  name        String
+  subdomain   String   @unique
+  logoUrl     String?
+  plan        String   @default("free") // free, pro, enterprise
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       User[]
+  teams       Team[]
+  attendances Attendance[]
+  tasks       Task[]
+  expenses    Expense[]
+  orders      Order[]
+  visits      Visit[]
+  geofences   Geofence[]
+}
+
+// ---------- Users & Roles ----------
+enum Role {
+  SUPER_ADMIN
+  COMPANY_ADMIN
+  MANAGER
+  TEAM_LEAD
+  EMPLOYEE
+}
+
+model User {
+  id            String    @id @default(uuid())
+  companyId     String
+  company       Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  email         String    @unique
+  phone         String?   @unique
+  passwordHash  String
+  fullName      String
+  role          Role      @default(EMPLOYEE)
+  avatarUrl     String?
+  faceEmbedding Bytes?
+  deviceId      String?
+  fcmToken      String?
+  teamId        String?
+  team          Team?     @relation(fields: [teamId], references: [id])
+  managerId     String?
+  manager       User?     @relation("UserManager", fields: [managerId], references: [id])
+  reports       User[]    @relation("UserManager")
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  attendances   Attendance[]
+  locations     LocationPing[]
+  tasksAssigned Task[] @relation("TaskAssignee")
+  tasksCreated  Task[] @relation("TaskCreator")
+  expenses      Expense[]
+  orders        Order[]
+  visits        Visit[]
+  notifications Notification[]
+  refreshTokens RefreshToken[]
+  sentMessages     Message[] @relation("MessageSender")
+  receivedMessages Message[] @relation("MessageRecipient")
+
+  @@index([companyId, role])
+}
+
+// ---------- Dynamic forms (Case/Visit capture) ----------
+model FormTemplate {
+  id          String   @id @default(uuid())
+  companyId   String
+  key         String   // stable identifier e.g. "property_valuation", "collections_visit"
+  name        String
+  description String?
+  version     Int      @default(1)
+  schema      Json     // array of field definitions
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  submissions FormSubmission[]
+  @@unique([companyId, key, version])
+  @@index([companyId, isActive])
+}
+
+model FormSubmission {
+  id           String   @id @default(uuid())
+  companyId    String
+  templateId   String
+  template     FormTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  userId       String
+  refId        String?  // ties to dealer/case/task in the host system
+  refType      String?
+  data         Json     // submitted answers keyed by field id
+  attachments  Json?    // array of S3 keys
+  lat          Float?
+  lng          Float?
+  capturedAt   DateTime @default(now())
+
+  @@index([companyId, templateId, capturedAt])
+  @@index([refId])
+}
+
+// ---------- Webhooks (outbound integrations) ----------
+model Webhook {
+  id            String   @id @default(uuid())
+  companyId     String
+  name          String
+  url           String
+  secret        String   // shared HMAC-SHA256 secret
+  events        String[] // e.g. ["visit.completed","sos.triggered"]
+  isActive      Boolean  @default(true)
+  failureCount  Int      @default(0)
+  lastDeliveryAt DateTime?
+  createdAt     DateTime @default(now())
+
+  deliveries    WebhookDelivery[]
+  @@index([companyId, isActive])
+}
+
+model WebhookDelivery {
+  id          String   @id @default(uuid())
+  webhookId   String
+  webhook     Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  event       String
+  payload     Json
+  status      Int?     // HTTP status; null = network error
+  response    String?  // first 1KB of response body
+  attemptedAt DateTime @default(now())
+
+  @@index([webhookId, attemptedAt])
+}
+
+// ---------- Leave management ----------
+enum LeaveStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum LeaveType {
+  CASUAL
+  SICK
+  EARNED
+  UNPAID
+  COMP_OFF
+}
+
+model LeaveRequest {
+  id          String   @id @default(uuid())
+  companyId   String
+  userId      String
+  type        LeaveType
+  startDate   DateTime @db.Date
+  endDate     DateTime @db.Date
+  days        Float    // supports half-day
+  reason      String?
+  status      LeaveStatus @default(PENDING)
+  approverId  String?
+  decidedAt   DateTime?
+  decisionNote String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([companyId, status])
+  @@index([userId, startDate])
+}
+
+// ---------- DPDP / Consent ----------
+enum ConsentType {
+  LOCATION_TRACKING
+  FACE_BIOMETRIC
+  MARKETING
+  ANALYTICS
+}
+
+model Consent {
+  id          String   @id @default(uuid())
+  userId      String
+  type        ConsentType
+  granted     Boolean
+  purpose     String?  // human-readable purpose statement displayed at the time
+  policyVersion String? // which privacy-policy version was shown
+  ip          String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  @@index([userId, type, createdAt])
+}
+
+model ErasureRequest {
+  id           String   @id @default(uuid())
+  userId       String
+  status       String   @default("REQUESTED") // REQUESTED, PROCESSING, COMPLETED, REJECTED
+  reason       String?
+  scheduledFor DateTime?
+  processedAt  DateTime?
+  createdAt    DateTime @default(now())
+}
+
+// ---------- SOS / panic ----------
+enum SosStatus {
+  ACTIVE
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+model SosAlert {
+  id          String   @id @default(uuid())
+  companyId   String
+  userId      String
+  lat         Float
+  lng         Float
+  accuracy    Float?
+  audioUrl    String?
+  note        String?
+  status      SosStatus @default(ACTIVE)
+  acknowledgedById String?
+  acknowledgedAt   DateTime?
+  resolvedById     String?
+  resolvedAt       DateTime?
+  createdAt        DateTime @default(now())
+
+  @@index([companyId, status, createdAt])
+}
+
+// ---------- Chat ----------
+model Message {
+  id          String   @id @default(uuid())
+  companyId   String   // tenant scope — enforced on every query
+  senderId    String
+  sender      User     @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  recipientId String
+  recipient   User     @relation("MessageRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  body        String
+  readAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  @@index([companyId, recipientId, createdAt])
+  @@index([senderId, recipientId, createdAt])
+}
+
+model RefreshToken {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash  String   @unique
+  expiresAt  DateTime
+  revoked    Boolean  @default(false)
+  createdAt  DateTime @default(now())
+}
+
+model Team {
+  id        String   @id @default(uuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name      String
+  members   User[]
+  createdAt DateTime @default(now())
+}
+
+// ---------- Attendance ----------
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+  LATE
+  ON_LEAVE
+}
+
+model Attendance {
+  id              String   @id @default(uuid())
+  companyId       String
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date            DateTime @db.Date
+  checkInAt       DateTime?
+  checkOutAt      DateTime?
+  checkInLat      Float?
+  checkInLng      Float?
+  checkOutLat     Float?
+  checkOutLng     Float?
+  checkInSelfie   String?
+  checkOutSelfie  String?
+  faceVerified    Boolean  @default(false)
+  withinGeofence  Boolean  @default(false)
+  workMinutes     Int?
+  breakMinutes    Int      @default(0)
+  status          AttendanceStatus @default(PRESENT)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([userId, date])
+  @@index([companyId, date])
+}
+
+// ---------- Live Location ----------
+model LocationPing {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lat       Float
+  lng       Float
+  accuracy  Float?
+  speed     Float?
+  battery   Int?
+  isMoving  Boolean  @default(false)
+  isMock    Boolean  @default(false) // flagged spoofed/mock-provider fix; never accepted as valid
+  recordedAt DateTime
+  createdAt  DateTime @default(now())
+
+  @@index([userId, recordedAt])
+}
+
+model Geofence {
+  id        String   @id @default(uuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  name      String
+  lat       Float
+  lng       Float
+  radiusM   Int
+  type      String   @default("office") // office, client, restricted
+  createdAt DateTime @default(now())
+}
+
+// ---------- Tasks ----------
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Task {
+  id          String   @id @default(uuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  status      TaskStatus  @default(PENDING)
+  priority    TaskPriority @default(MEDIUM)
+  dueAt       DateTime?
+  assigneeId  String?
+  assignee    User?    @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  createdById String
+  createdBy   User     @relation("TaskCreator", fields: [createdById], references: [id])
+  proofUrl    String?
+  completedAt DateTime?
+  completedLat Float?
+  completedLng Float?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  comments    TaskComment[]
+  @@index([companyId, status])
+}
+
+model TaskComment {
+  id        String   @id @default(uuid())
+  taskId    String
+  task      Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  userId    String
+  body      String
+  createdAt DateTime @default(now())
+}
+
+// ---------- Expenses ----------
+enum ExpenseStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  PAID
+}
+
+model Expense {
+  id          String   @id @default(uuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category    String   // travel, meal, lodging, fuel, other
+  amount      Decimal  @db.Decimal(12, 2)
+  currency    String   @default("INR")
+  description String?
+  receiptUrl  String?
+  distanceKm  Float?
+  fromLat     Float?
+  fromLng     Float?
+  toLat       Float?
+  toLng       Float?
+  status      ExpenseStatus @default(DRAFT)
+  approvedById String?
+  approvedAt  DateTime?
+  rejectedReason String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([companyId, status])
+}
+
+// ---------- Sales / Orders / Visits ----------
+model Dealer {
+  id        String   @id @default(uuid())
+  companyId String
+  name      String
+  contact   String?
+  phone     String?
+  email     String?
+  address   String?
+  lat       Float?
+  lng       Float?
+  createdAt DateTime @default(now())
+
+  visits    Visit[]
+  orders    Order[]
+}
+
+model Visit {
+  id         String   @id @default(uuid())
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dealerId   String
+  dealer     Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  checkInAt  DateTime
+  checkOutAt DateTime?
+  lat        Float
+  lng        Float
+  notes      String?
+  photoUrl   String?
+  createdAt  DateTime @default(now())
+}
+
+model Product {
+  id        String   @id @default(uuid())
+  companyId String
+  sku       String
+  name      String
+  price     Decimal  @db.Decimal(12, 2)
+  unit      String   @default("pcs")
+  imageUrl  String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  orderItems OrderItem[]
+  @@unique([companyId, sku])
+}
+
+enum OrderStatus {
+  DRAFT
+  CONFIRMED
+  DISPATCHED
+  DELIVERED
+  CANCELLED
+}
+
+model Order {
+  id          String   @id @default(uuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  dealerId    String
+  dealer      Dealer   @relation(fields: [dealerId], references: [id], onDelete: Cascade)
+  orderNumber String   @unique
+  total       Decimal  @db.Decimal(14, 2)
+  status      OrderStatus @default(DRAFT)
+  invoiceUrl  String?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  items       OrderItem[]
+  @@index([companyId, status])
+}
+
+model OrderItem {
+  id        String   @id @default(uuid())
+  orderId   String
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  productId String
+  product   Product  @relation(fields: [productId], references: [id])
+  quantity  Int
+  price     Decimal  @db.Decimal(12, 2)
+  subtotal  Decimal  @db.Decimal(14, 2)
+}
+
+// ---------- Notifications ----------
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  body      String
+  type      String   // task, attendance, expense, system
+  data      Json?
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, readAt])
+}
+
+// ---------- Audit ----------
+model AuditLog {
+  id         String   @id @default(uuid())
+  companyId  String
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  meta       Json?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([companyId, createdAt])
+}

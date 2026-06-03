@@ -1,0 +1,2 @@
+# Custom React hooks (useDebounce, useSocketEvent, useGeofence, etc.).
+# Co-locate with the feature they serve when only one page uses them; share here when reused.
