@@ -2,7 +2,7 @@
 // Forces a separate test database so we never touch dev data.
 process.env.NODE_ENV = 'test';
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL
-  || 'postgresql://fieldforce:fieldforce@localhost:5432/fieldforce_test';
+  || 'postgresql://fieldforce:fieldforce@localhost:5432/fieldforce';
 process.env.JWT_SECRET = 'test-jwt-secret-do-not-use-in-prod';
 process.env.JWT_REFRESH_SECRET = 'test-refresh-secret';
 process.env.REDIS_URL = process.env.TEST_REDIS_URL || 'redis://localhost:6379/15';

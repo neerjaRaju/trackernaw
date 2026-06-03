@@ -610,8 +610,8 @@ Run through these in order. Each line is something the codebase will let you ski
 ```bash
 cd backend
 # Create the test database (one-time)
-createdb fieldforce_test
-TEST_DATABASE_URL=postgresql://fieldforce:fieldforce@localhost:5432/fieldforce_test npm test
+createdb fieldforce
+TEST_DATABASE_URL=postgresql://fieldforce:fieldforce@localhost:5432/fieldforce npm test
 ```
 
 The suite covers authentication, password validation, account lockout flow, tenant isolation across companies, RBAC enforcement, mock-GPS rejection, geofence detection, Haversine math, stop-cluster detection, attendance check-in/out lifecycle, and dual-checkin prevention. Coverage threshold is 60% lines / 60% functions; CI fails below that.

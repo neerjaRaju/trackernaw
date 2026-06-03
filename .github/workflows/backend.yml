@@ -14,12 +14,12 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: fieldforce_test
-          POSTGRES_PASSWORD: fieldforce_test
-          POSTGRES_DB: fieldforce_test
+          POSTGRES_USER: fieldforce
+          POSTGRES_PASSWORD: fieldforce
+          POSTGRES_DB: fieldforce
         ports: ['5432:5432']
         options: >-
-          --health-cmd "pg_isready -U fieldforce_test" --health-interval 10s --health-timeout 5s --health-retries 5
+          --health-cmd "pg_isready -U fieldforce" --health-interval 10s --health-timeout 5s --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -31,7 +31,7 @@ jobs:
       - run: cd backend && npx prisma generate
       - run: cd backend && npx prisma migrate deploy
         env:
-          DATABASE_URL: postgresql://fieldforce_test:fieldforce_test@localhost:5432/fieldforce_test
+          DATABASE_URL: postgresql://fieldforce:fieldforce@localhost:5432/fieldforce
       - run: cd backend && npm test --if-present
 
   docker:
