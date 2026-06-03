@@ -1,15 +1,78 @@
 name: Backend CI
 
+# Runs on every push to a backend file OR change to this workflow itself.
+# PRs run the gate jobs (lint, audit, test) but not the docker build/push.
 on:
   push:
     branches: [main]
-    paths: ['backend/**']
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend.yml'
   pull_request:
-    paths: ['backend/**']
+    paths:
+      - 'backend/**'
+      - '.github/workflows/backend.yml'
+
+# Cancel an in-flight run when a newer commit lands on the same ref.
+concurrency:
+  group: backend-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '20'
+  WORKDIR: backend
 
 jobs:
-  build-test:
+  # -----------------------------------------------------------------
+  # 1. Lint — fast feedback, runs first.
+  # -----------------------------------------------------------------
+  lint:
+    name: Lint
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.WORKDIR }}/package-lock.json
+      - name: Install
+        working-directory: ${{ env.WORKDIR }}
+        run: npm ci --no-audit --no-fund
+      - name: Lint
+        working-directory: ${{ env.WORKDIR }}
+        run: npm run lint --if-present
+
+  # -----------------------------------------------------------------
+  # 2. Dependency vulnerability audit — fails on HIGH or CRITICAL.
+  # -----------------------------------------------------------------
+  audit:
+    name: npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.WORKDIR }}/package-lock.json
+      - name: Install
+        working-directory: ${{ env.WORKDIR }}
+        run: npm ci --no-audit --no-fund
+      - name: Audit production deps (fail on high+)
+        working-directory: ${{ env.WORKDIR }}
+        run: npm audit --omit=dev --audit-level=high
+
+  # -----------------------------------------------------------------
+  # 3. Tests — real Postgres + Redis services, coverage gate.
+  # -----------------------------------------------------------------
+  test:
+    name: Test + coverage
+    runs-on: ubuntu-latest
+
     services:
       postgres:
         image: postgres:16-alpine
@@ -19,34 +82,150 @@ jobs:
           POSTGRES_DB: fieldforce
         ports: ['5432:5432']
         options: >-
-          --health-cmd "pg_isready -U fieldforce" --health-interval 10s --health-timeout 5s --health-retries 5
+          --health-cmd "pg_isready -U fieldforce"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://fieldforce:fieldforce@localhost:5432/fieldforce
+      TEST_DATABASE_URL: postgresql://fieldforce:fieldforce@localhost:5432/fieldforce
+      REDIS_URL: redis://localhost:6379
+      TEST_REDIS_URL: redis://localhost:6379/15
+      # CI-only secrets — 32+ chars to satisfy the production-guard length check,
+      # but obviously not for real deployments.
+      JWT_SECRET: ci-jwt-secret-32-chars-minimum-not-prod
+      JWT_REFRESH_SECRET: ci-refresh-secret-different-32-chars-x
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ env.WORKDIR }}/package-lock.json
+
+      - name: Install dependencies
+        working-directory: ${{ env.WORKDIR }}
+        run: npm ci --no-audit --no-fund
+
+      - name: Generate Prisma client
+        working-directory: ${{ env.WORKDIR }}
+        run: npx prisma generate
+
+      - name: Apply migrations to test DB
+        working-directory: ${{ env.WORKDIR }}
+        run: npx prisma migrate deploy
+
+      - name: Run tests with coverage
+        working-directory: ${{ env.WORKDIR }}
+        run: npm run test:coverage
+
+      - name: Upload coverage as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-${{ github.run_number }}
+          path: ${{ env.WORKDIR }}/coverage/
+          retention-days: 14
+
+      - name: Upload JUnit-style summary to job
+        if: always()
+        run: |
+          if [ -f ${{ env.WORKDIR }}/coverage/coverage-summary.json ]; then
+            echo "## Coverage" >> $GITHUB_STEP_SUMMARY
+            node -e "
+              const s = require('./${{ env.WORKDIR }}/coverage/coverage-summary.json').total;
+              const row = (k) => '| ' + k + ' | ' + s[k].pct + '% |';
+              console.log('| Metric | Coverage |\n|---|---|\n' + ['lines','statements','functions','branches'].map(row).join('\n'));
+            " >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # -----------------------------------------------------------------
+  # 4. Build + push Docker image (main only).
+  # -----------------------------------------------------------------
+  docker:
+    name: Build + push Docker image
+    needs: [lint, audit, test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to DockerHub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Tag with :latest, :sha-<commit>, and :main so deploys can pin a SHA
+      # for reproducibility while runtime keeps tracking :latest.
+      - name: Compute tags + labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/fieldforce-backend
+          tags: |
+            type=raw,value=latest
+            type=raw,value=main
+            type=sha,prefix=sha-,format=long
+          labels: |
+            org.opencontainers.image.title=fieldforce-backend
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build + push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image digest
+        run: echo "Pushed ${{ steps.meta.outputs.tags }}"
+
+  # -----------------------------------------------------------------
+  # 5. Apply pending Prisma migrations against the production DB.
+  #     Gated behind the `production` environment so approval is required.
+  # -----------------------------------------------------------------
+  migrate:
+    name: Run DB migrations (production)
+    needs: docker
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production    # requires manual approval if configured
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ env.NODE_VERSION }}
           cache: npm
-          cache-dependency-path: backend/package-lock.json
-      - run: cd backend && npm ci
-      - run: cd backend && npx prisma generate
-      - run: cd backend && npx prisma migrate deploy
+          cache-dependency-path: ${{ env.WORKDIR }}/package-lock.json
+      - name: Install
+        working-directory: ${{ env.WORKDIR }}
+        run: npm ci --no-audit --no-fund
+      - name: prisma migrate deploy
+        working-directory: ${{ env.WORKDIR }}
         env:
-          DATABASE_URL: postgresql://fieldforce:fieldforce@localhost:5432/fieldforce
-      - run: cd backend && npm test --if-present
-
-  docker:
-    needs: build-test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/fieldforce-backend:latest
+          DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+        run: npx prisma migrate deploy
