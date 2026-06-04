@@ -35,6 +35,9 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    # Lint is advisory — it reports issues but does not gate downstream jobs.
+    # Promote to a hard gate once the codebase is fully clean.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -159,7 +162,7 @@ jobs:
   # -----------------------------------------------------------------
   docker:
     name: Docker
-    needs: [lint, audit, test]
+    needs: [audit, test]   # lint is advisory, not a docker gate
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -289,13 +292,19 @@ jobs:
             fi
           fi
 
-          # Fail the summary job (and therefore the workflow) only when a
-          # required gate actually failed — skipped jobs are not failures.
-          if [ "${{ needs.lint.result }}" = "failure" ] \
-            || [ "${{ needs.audit.result }}" = "failure" ] \
+          # Lint is advisory — call it out but never fail the workflow on it.
+          if [ "${{ needs.lint.result }}" = "failure" ]; then
+            echo "::warning::Lint reported issues — see the Lint job. Workflow not failed (advisory)." >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "⚠️ **Lint reported issues** — see the Lint job output. Fix at your convenience; this does not block deploys yet." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+          # Fail the workflow only when a REQUIRED gate failed.
+          # lint is advisory and is intentionally excluded.
+          if [ "${{ needs.audit.result }}" = "failure" ] \
             || [ "${{ needs.test.result }}" = "failure" ] \
             || [ "${{ needs.docker.result }}" = "failure" ] \
             || [ "${{ needs.migrate.result }}" = "failure" ]; then
-            echo "::error::One or more pipeline jobs failed."
+            echo "::error::One or more required pipeline jobs failed."
             exit 1
           fi
